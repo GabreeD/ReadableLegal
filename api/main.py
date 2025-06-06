@@ -1,12 +1,8 @@
-import base64
-import json
-import argparse
-import pdfplumber
-import asyncio
+import base64, json, argparse, pdfplumber, asyncio
 
 from transformers import AutoTokenizer
 from datetime import datetime
-from api.client import call_legiscan_api
+from client import call_legiscan_api
 from bs4 import BeautifulSoup
 from collections import defaultdict
 from transformers import pipeline
@@ -25,7 +21,6 @@ class LegiScanAPI:
         self.summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
         # self.nlp = spacy.load("en_core_web_sm")
         self.tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
-
 
         if args.command == "bill" or args.command == "billText":
             self.load_task()
@@ -151,10 +146,10 @@ class LegiScanAPI:
     def analyze_data(self):
 
         try:
-            with open("billTexts.json", "r") as file:
+            with open("./json/billTexts.json", "r") as file:
                 billDatas = json.load(file)
         except (FileNotFoundError, json.JSONDecodeError):
-            print("oops")
+            print("Could find billTexts.json")
 
         for index,bill in enumerate(billDatas):
 
@@ -208,12 +203,12 @@ class LegiScanAPI:
 
     def read_bills(self):
         try:
-            with open("billTexts.json", "r") as file:
+            with open("../json/billTexts.json", "r") as file:
                 billDatas = json.load(file)
                 print("Before",len(billDatas))
         except (FileNotFoundError, json.JSONDecodeError):
             billDatas=[]
-            print("oops")
+            print("Couldn't find billTexts.json")
 
         print(len(billDatas))
         for bill in billDatas:
