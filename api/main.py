@@ -1,10 +1,9 @@
-import base64, json, argparse, pdfplumber, asyncio
+import json, argparse, pdfplumber
+import bill.run as run
 
+from client import call_legiscan_api
 from transformers import AutoTokenizer
 from datetime import datetime
-from client import call_legiscan_api
-from bs4 import BeautifulSoup
-from collections import defaultdict
 from transformers import pipeline
 
 class LegiScanAPI:
@@ -24,7 +23,7 @@ class LegiScanAPI:
 
         if args.command == "bill" or args.command == "billText":
             self.load_task()
-            self.get_bill_text(args.command)
+            run.get_bill_text(self,args.command)
         elif args.command == "reset":
             self.get_master_list()
         elif args.command == "resetRAW":
@@ -38,103 +37,29 @@ class LegiScanAPI:
 
     def load_task(self):
         try:
-            with open("master.json", "r") as file:
+            with open("../json/master.json", "r") as file:
                 self.holdData = json.load(file)
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
     def get_master_list_raw(self):
-        print("here")
         data = call_legiscan_api("getMasterListRaw", state="US")
         bills = list(data['masterlist'].values())
-
-        with open("master.json", "w") as file:
-            json.dump(bills, file, indent=2)
-
+        try:
+            with open("json/master.json", "w") as file:
+                json.dump(bills, file, indent=2)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(e)
 
     def get_master_list(self):
         print("here")
         data = call_legiscan_api("getMasterList", state="US")
         bills = list(data['masterlist'].values())
-        
-        with open("master.json", "w") as file:
-            json.dump(bills, file, indent=2)
-
-    def get_bill_text(self, choice):
-        masterList = self.holdData[1:]
-
-        billDatas = []
-        print("Number of Bills:",len(masterList))
-
         try:
-            with open("bills.json", "r") as file:
-                billDatas = json.load(file)
-        except (FileNotFoundError, json.JSONDecodeError):
-            for billSummary in masterList[:100]:
-                billDatas.append(call_legiscan_api("getBill", id=billSummary["bill_id"])["bill"])
-            with open("bills.json", "w") as file:
-                json.dump(billDatas, file, indent=2)
-        
-        if choice=="billText":
-            billTexts = asyncio.run(self.async_process_all_bill_texts(billDatas))
-
-            with open("billTexts.json", "w") as file:
-                json.dump(billTexts, file, indent=2)
-
-    async def async_process_all_bill_texts(self, billDatas):
-        tasks = []
-
-        for bill in billDatas:
-            for textDoc in bill["texts"]:
-                tasks.append(self.process_text_doc(bill, textDoc))  
-
-        results = await asyncio.gather(*tasks)
-        return results
-
-    async def process_text_doc(self, bill, textDoc):
-        billText = await asyncio.to_thread(call_legiscan_api, "getBillText", id=textDoc["doc_id"])
-        billText = billText["text"]
-        decoded_bytes = base64.b64decode(billText["doc"])
-
-        try:
-            decoded_text = decoded_bytes.decode("utf-8")
-            soup = BeautifulSoup(decoded_text, "html.parser")
-            clean_text = soup.get_text()
-            billText["decoded_text"] = clean_text
-        except UnicodeDecodeError:
-            await asyncio.to_thread(self.extract_pdf_text, decoded_bytes, billText)
-
-        # Group sponsors (cheap, keep as-is)
-        grouped_sponsors = defaultdict(list)
-        for s in bill["sponsors"]:
-            key = f"{s['role']}-{s['party']}"
-            val = f"{s['name']} ({key}-{s['district']})"
-            grouped_sponsors[key].append(val)
-
-        # Split & summarize in parallel
-        chunks = self.split_into_chunks(billText["decoded_text"])
-        summaries = await asyncio.gather(*[
-            asyncio.to_thread(
-                self.summarizer,
-                f"Summarize clearly and concisely: {chunk}",
-                max_length=150,
-                min_length=60,
-                do_sample=False
-            ) for chunk in chunks
-        ])
-
-        partial_summaries = [s[0]["summary_text"] for s in summaries]
-        split_text = partial_summaries[0] if len(partial_summaries) == 1 else partial_summaries
-
-        return {
-            "doc_id": billText["doc_id"],
-            "bill_id": billText["bill_id"],
-            "url": billText["url"],
-            "decoded_text": {"text": billText["decoded_text"]},
-            "analysis_text": split_text,
-            "sponsors": dict(grouped_sponsors),
-            "progress": bill["progress"],
-        }
+            with open("json/master.json", "w") as file:
+                json.dump(bills, file, indent=2)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(e)
 
     def extract_pdf_text(self, decoded_bytes, billText):
         with open("bill.pdf", "wb") as f:
@@ -206,26 +131,13 @@ class LegiScanAPI:
             with open("../json/billTexts.json", "r") as file:
                 billDatas = json.load(file)
                 print("Before",len(billDatas))
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError) as e:
             billDatas=[]
-            print("Couldn't find billTexts.json")
+            print(e)
 
         print(len(billDatas))
         for bill in billDatas:
             print(f"{bill["doc_id"]} \nNeutral Summary: {bill["final_summary"]} \nLiberal Summary: {bill["liberal_summary"]} \nConservative Summary: {bill["conservative_summary"]}\n\n")
-
-    def split_into_chunks(self, text, max_tokens=1024, stride=256):
-        tokens = self.tokenizer.encode(text)
-        chunks = []
-        start = 0
-        while start < len(tokens):
-            print(start,len(tokens))
-            end = min(start + max_tokens, len(tokens))
-            chunk = tokens[start:end]
-            chunks.append(chunk)
-            start += max_tokens - stride  # overlap
-        print()
-        return [self.tokenizer.decode(chunk, skip_special_tokens=True) for chunk in chunks]
 
 class FollowTheMoney:
     # https://www.followthemoney.org/our-data/apis/documentation
